@@ -1,0 +1,3 @@
+[submodule "src/shellphp"]
+	path = src/shellphp
+	url = https://github.com/DaSpors/shellphp.git
