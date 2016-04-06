@@ -1,0 +1,14 @@
+_mtvcli()
+{
+    local cur opts job cmdline
+    job="${COMP_WORDS[0]}"
+    cur="${COMP_WORDS[COMP_CWORD]}"
+	cmdline=$(printf "%s " "${COMP_WORDS[@]}")
+    opts=$(${job} __check__ ${cmdline})
+	if [ -z "${opts}" ] ; then
+        return 1;
+    fi
+	COMPREPLY=( $(compgen -W "${opts}" -- ${cur}) )
+    return 0;
+}
+complete -o default -F _mtvcli mtvcli
