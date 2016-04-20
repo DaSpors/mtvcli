@@ -57,7 +57,7 @@ class Movie extends \ShellPHP\Storage\StoredObject
 			$name = $this->theme." - ".$this->title.".".pathinfo($url,PATHINFO_EXTENSION);
 		else
 			$name = $this->title.".".pathinfo($url,PATHINFO_EXTENSION);
-		$name = str_replace(array('ä','ö','ü','Ä','Ö','Ü','ß'),array('ae','oe','üe','Ae','Oe','Ue','ss'),$name);
+		$name = str_replace(array('ä','ö','ü','Ä','Ö','Ü','ß'),array('ae','oe','ue','Ae','Oe','Ue','ss'),$name);
 		$name = preg_replace('/[^a-z0-9\._-]/i',' ',$name);
 		while( strpos($name,'  ') !== false )
 			$name = str_replace('  ',' ',$name);
