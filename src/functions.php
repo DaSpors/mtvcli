@@ -1,17 +1,23 @@
 <?php
 
 $INIFILE = ISWIN?$_SERVER['USERPROFILE'].'/mtvcli.ini':('/etc/mtvcli.ini');
+$QUALITY = array(20,30,10);
 if( file_exists($INIFILE) )
 {
 	$ini = parse_ini_file($INIFILE);
 	if( isset($ini['folder']) && $ini['folder'] )
 		$SETTINGS_FOLDER = $ini['folder'];
+	
+	if( isset($ini['quality']) && $ini['quality'] )
+		$QUALITY = explode(",",str_replace(array('h','m','l'),array(30,20,10),strtolower($ini['quality'])));
 }
 if( !isset($SETTINGS_FOLDER) || !$SETTINGS_FOLDER )
 	$SETTINGS_FOLDER = ISWIN?$_SERVER['USERPROFILE'].'/.mtvcli':($_SERVER['HOME'].'/.mtvcli');
 if( !file_exists($SETTINGS_FOLDER) ) mkdir($SETTINGS_FOLDER);
 @define('SETTINGS_FOLDER',realpath($SETTINGS_FOLDER));
+@define('QUALITY',implode(",",$QUALITY));
 unset($SETTINGS_FOLDER);
+unset($QUALITY);
 
 if( ISWIN )
 	define('UNXZ',__DIR__.'/bin/xz/xzdec.exe {in} > {out}');

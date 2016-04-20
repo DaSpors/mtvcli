@@ -1,34 +1,34 @@
 <?php
 
-function get($id,$quality)
+function get($id)
 {
-	foreach( Movie::Select()->in('id',explode(",",$id))->results() as $movie ) 
+	foreach( Broadcast::Select()->in('id',explode(",",$id))->results() as $bc ) 
 	{
-		$dl = $movie->queue();
+		$dl = $bc->queue();
 		if( $dl ) $dl->start();
 	}
 }
 
 function skip($id)
 {
-	Movie::Select()->in('id',explode(",",$id))->each(function($movie)
+	Broadcast::Select()->in('id',explode(",",$id))->each(function($bc)
 	{
-		$dl = $movie->queue();
+		$dl = $bc->queue();
 		if( $dl ) $dl->skip();
 	});
 }
 
-function add($id,$quality)
+function add($id)
 {
-	Movie::Select()->in('id',explode(",",$id))->each(function($movie)use($quality)
+	Broadcast::Select()->in('id',explode(",",$id))->each(function($bc)
 	{
-		$dl = $movie->queue('.',$quality);
+		$dl = $bc->queue();
 	});
 }
 
 function remove($id)
 {
-	Download::Select()->in('movie_id',explode(",",$id))->each(function($dl){ $dl->Delete(); });
+	Download::Select()->in('broadcast_id',explode(",",$id))->each(function($dl){ $dl->Delete(); });
 }
 
 function clear()
@@ -36,11 +36,10 @@ function clear()
 	Download::Select()->isNull('finished')->each(function($dl){ $dl->Delete(); });
 }
 
-function subscribe($name,$folder,$id,$quality)
+function subscribe($name,$folder,$id)
 {
 	$name = trim($name);
 	$id = intval($id);
-	$quality = sanitizeQuality($quality);
 	
 	if( $id )
 		$search = Search::Select()->eq('id',$id)->current();
@@ -56,10 +55,11 @@ function subscribe($name,$folder,$id,$quality)
 	
 	$sub->set('name',$name)
 		->set('folder',$folder)
-		->set('quality',$quality)
 		->set('pattern',$search->pattern)
 		->set('min_duration',$search->min_duration)
-		->set('fields',$search->fields)
+		->set('station',$search->station)
+		->set('skip_title',$search->skip_title)
+		->set('skip_channel',$search->skip_channel)
 		->Save();
 	
 	write("Subscription added");	
@@ -67,10 +67,10 @@ function subscribe($name,$folder,$id,$quality)
 
 function sub_list()
 {	
-	startTable(array('Name','Folder','Quality','Pattern','Min duration','Fields'));
+	startTable(array('Name','Folder','Pattern','Min duration','Station','Skip title','Skip channel'));
 	Subscription::Select()->oderBy('name')->each(function($sub)
 	{
-		$row = $sub->get('name','folder','quality','pattern','min_duration','fields');
+		$row = $sub->get('name','folder','pattern','min_duration','station','skip_title','skip_channel');
 		addTableRow($row);
 	});
 	flushTable();
@@ -81,7 +81,7 @@ function down_list()
 	startTable(array('ID','Filename','Progress','Started','Message'));
 	Download::Select()->isNull('finished')->oderBy('started DESC')->oderBy('filename')->each(function($dl)
 	{
-		$row = $dl->get('movie_id','filename','downloaded','started','message');
+		$row = $dl->get('broadcast_id','filename','downloaded','started','message');
 		$row['downloaded'] = $row['downloaded']?sprintf("%3d",$row['downloaded'])."%":'';
 		addTableRow($row);
 	});

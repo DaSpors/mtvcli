@@ -98,6 +98,7 @@ class Movie extends \ShellPHP\Storage\StoredObject
 class MovieListUrl extends \ShellPHP\Storage\StoredObject
 {
 	public $url = 'text primary';
+	public $type = 'text';
 }
 
 class Search extends \ShellPHP\Storage\StoredObject
@@ -106,33 +107,83 @@ class Search extends \ShellPHP\Storage\StoredObject
 	
 	public $id           = 'int primary autoinc';
 	public $searched     = 'datetime';
-	public $pattern      = 'text unique pattern_dur_fields';
-	public $min_duration = 'int unique pattern_dur_fields';
-	public $fields       = 'text unique pattern_dur_fields';
+	public $pattern      = 'text unique complete';
+	public $min_duration = 'int unique complete';
+	public $station      = 'text unique complete';
+	public $skip_title   = 'bool unique complete';
+	public $skip_channel = 'bool unique complete';
+	
+	public static function Ensure($pattern,$min_duration,$station,$skip_title,$skip_channel)
+	{
+		$s = Search::Select()
+			->eq('pattern',$pattern)
+			->eq('min_duration',$min_duration)
+			->eq('station',$station)
+			->eq('skip_title',$skip_title)
+			->eq('skip_channel',$skip_channel)
+			->current();
+		if( $s )
+			return $s;
+		$s = Search::Make()
+			->set('pattern',$pattern)
+			->set('min_duration',$min_duration)
+			->set('station',$station)
+			->set('skip_title',$skip_title)
+			->set('skip_channel',$skip_channel);
+		$s->Save();
+		return $s;
+	}
+	
+	public function Perform()
+	{
+		$this->searched = '__NOW__';
+		$this->Save();
+		
+		if( $this->skip_title && $this->skip_channel )
+			throw new Exception("Cannot search nowhere");
+		
+		$q = Broadcast::Select()
+			->resolveFK('s','station_id','stations')
+			->resolveFK('c','channel_id','channels')
+			->resolveFK('p','program_id','programs')
+			->gte('p.duration',intval($this->min_duration))
+			->gt("(SELECT count(*) FROM videos WHERE videos.broadcast_id=id)",0,false,false);
+			
+		if( $this->station )
+			$q->eq('s.name',$this->station);
+		
+		$q->any();
+		
+		if( !$this->skip_title )
+			$q->like('p.name',$this->pattern);
+		if( !$this->skip_channel )
+			$q->like('c.name',$this->pattern);
+		return $q;
+	}
 }
 
 class Subscription extends \ShellPHP\Storage\StoredObject
 {
 	public $name      = 'text primary';
 	public $folder      = 'text';
-	public $quality      = 'text';
 	public $searched     = 'datetime';
 	public $pattern      = 'text';
 	public $min_duration = 'int';
-	public $fields       = 'text';
+	public $station      = 'text';
+	public $skip_title   = 'int';
+	public $skip_channel = 'int';
 	
 	public function QueueDownloads()
 	{
-		Movie::Search($this->pattern,$this->min_duration,$this->fields)->each(function($movie)
-		{
-			$movie->queue($this->folder,$this->quality);
-		});
+		$s = Search::Ensure($this->pattern,$this->min_duration,$this->station,$this->skip_title,$this->skip_channel);
+		foreach( $s->Perform()->results() as $bc )
+			$bc->queue($this->folder);
 	}
 }
 
 class Download extends \ShellPHP\Storage\StoredObject
 {
-	public $movie_id = 'int primary';
+	public $broadcast_id = 'int primary';
 	public $url = 'text unique';
 	public $filename = 'text';
 	public $size = 'int';
@@ -143,6 +194,16 @@ class Download extends \ShellPHP\Storage\StoredObject
 	public $finished = 'datetime';
 	public $stopped = 'datetime';
 	public $message = 'text';
+	
+	private $bytes_done = 0;
+	private $_buffer = array();
+	
+	public function getBroadcast()
+	{
+		if( !isset($this->_buffer['bc']) )
+			$this->_buffer['bc'] = Broadcast::Select()->eq('id',$this->broadcast_id)->current();
+		return $this->_buffer['bc'];
+	}
 	
 	public static function Cleanup()
 	{
@@ -159,12 +220,24 @@ class Download extends \ShellPHP\Storage\StoredObject
 	
 	public function stop($message)
 	{
+		write("Download stopped: $message");
 		return $this->set('stopped',"__NOW__")->set('pid',null)->set('message',$message)->Save();
 	}
 	
 	public function skip()
 	{
 		return $this->set('finished',"__NOW__")->set('pid',null)->set('message','skipped')->Save();
+	}
+	
+	private function reQueue($message)
+	{
+		$this->stop($message);
+		write("Removing invalid URL, trying to re-queue");
+		$vid = Video::Select()->eq('url',$this->url)->current();
+		if( $vid ) $vid->Delete();
+		
+		$bc = $this->getBroadcast();
+		$bc->queue(dirname($this->filename));
 	}
 	
 	public function start($fork=false)
@@ -176,35 +249,38 @@ class Download extends \ShellPHP\Storage\StoredObject
 			->set('pid',getmypid())
 			->Save();
 		
-		$movie = Movie::Select()->eq('id',$this->movie_id)->current();
-		if( !$movie )
-			return $this->stop('Movie not found');
+		$bc = $this->getBroadcast();
+		if( !$bc )
+			return $this->stop('Program not found');
 		
-		$id   = $movie->id;
+		$id   = $bc->id;
 		$url  = $this->url;
 		$file = $this->filename;
 		
+		write("");
 		write("Downloading movie $id");
-		write("  Sender   {$movie['sender']}");
-		write("  Theme    {$movie['theme']}");
-		write("  Title    {$movie['title']}");
+		write("  Station  ".$bc->getStation()->name);
+		write("  Channel  ".$bc->getChannel()->name);
+		write("  Title    ".$bc->getProgram()->name);
 		write("  URL      $url");
 		write("  Filename $file");
 		
+		if( file_exists($file) )
+			$this->bytes_done = filesize($file);
 		$this->storage = \ShellPHP\Storage\Storage::Make();
 		$result = downloadFile($url,$file,array($this,'downloadProgress'));
 		
 		if( !$result )
 		{
 			@rename($file,"$file.error");
-			write("Error downloading movie: $movie");
-			return $this->stop('download error');
+			write("Error downloading movie: $url");
+			return $this->reQueue('download error');
 		}
-		if( filesize($file) < 100 && strtolower(trim(file_get_contents($file))) == 'not found' )
+		if( filesize($file) < 100 && stripos(trim(file_get_contents($file)),'not found')!==false )
 		{
 			unlink($file);
-			write("File not found: $movie");
-			return $this->stop('not found');
+			write("File not found: $url");
+			return $this->reQueue('not found');
 		}
 		return $this->set('finished',"__NOW__")->set('pid',null)->set('message','ok')->Save();
 	}
@@ -213,6 +289,8 @@ class Download extends \ShellPHP\Storage\StoredObject
 	{
 		if( $download_size == 0 )
 			return;
+		$download_size += $this->bytes_done;
+		$downloaded += $this->bytes_done;
 		$p = floor($downloaded * 100 / $download_size);
 		if( $p != $this->downloaded )
 		{
