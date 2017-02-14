@@ -11,7 +11,7 @@ then
 	mv -f mtvcli.phar /usr/local/mtvcli/mtvcli.phar
 else
 	echo "Downloading mtvcli..."
-	wget -q -O /usr/local/mtvcli/mtvcli.phar https://github.com/daspors/mtvcli/mtvcli.phar
+	wget -q -O /usr/local/mtvcli/mtvcli.phar https://github.com/DaSpors/mtvcli/raw/master/mtvcli.phar
 fi
 
 echo
