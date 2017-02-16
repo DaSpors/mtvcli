@@ -7,47 +7,47 @@ require_once(__dir__.'/update.php');
 
 date_default_timezone_set("Europe/Berlin");
 
-//$webinterface = \ShellPHP\WebInterface\WebInterface::Make('0.0.0.0')
-//	->index(__DIR__."/web")
-//	->timer(5,10,function($args){ write("Yo ",$args); },'hallo','welt')
-//	->timer(1,3,function(){ throw new Exception("asdasd"); })
-//	->handler('search',function($request)
-//	{
-//		require_once(__dir__.'/search.php');
-//		write("SEARCHREQUEST",$request);
-//		
-//		$res = array();
-//		Movie::Search($request->arg('pattern',''),$request->arg('min_duration',0),$request->arg('fields','sender,theme,title'))
-//			->each(function($movie)use(&$res)
-//		{
-//			$movie->duration = formatDuration($movie->duration);
-//			$res[] = $movie;
-//			if( count($res) > 100 )
-//			{
-//				$res = array('err'=>'Too many results');
-//				return false;
-//			}
-//		});
-//		
-//		return \ShellPHP\WebInterface\WebResponse::Json($res);
-//	});
+$webinterface = \ShellPHP\WebInterface\WebInterface::Make('0.0.0.0')
+	->index(__DIR__."/web")
+	->timer(5,10,function($args){ write("Yo ",$args); },'hallo','welt')
+	->timer(1,3,function(){ throw new Exception("asdasd"); })
+	->handler('search',function($request)
+	{
+		require_once(__dir__.'/search.php');
+		write("SEARCHREQUEST",$request);
+		
+		$res = array();
+		Movie::Search($request->arg('pattern',''),$request->arg('min_duration',0),$request->arg('fields','sender,theme,title'))
+			->each(function($movie)use(&$res)
+		{
+			$movie->duration = formatDuration($movie->duration);
+			$res[] = $movie;
+			if( count($res) > 100 )
+			{
+				$res = array('err'=>'Too many results');
+				return false;
+			}
+		});
+		
+		return \ShellPHP\WebInterface\WebResponse::Json($res);
+	});
 
 $cli = \ShellPHP\CmdLine\CmdLine::Make("MediathekView CLI","Version 0.0.0.1")
 	->setName('mtvcli')
-//	->command('daemon')
-//		->text("Runs forever and provides a WebInterface at ".$webinterface->getAddress())
-//		->flag('-b')->alias('--background')->map('fork')->text('Switch to background')
-//		->handler(function($args)use(&$webinterface)
-//		{
-//			extract($args);
-//			if( $fork )
-//			{
-//				\ShellPHP\Process\Process::Run($GLOBALS['argv'][0],array('daemon'));
-//				die("Went to Background");
-//			}
-//			$webinterface->go();
-//		})
-//		->end()
+	->command('daemon')
+		->text("Runs forever and provides a WebInterface at ".$webinterface->getAddress())
+		->flag('-b')->alias('--background')->map('fork')->text('Switch to background')
+		->handler(function($args)use(&$webinterface)
+		{
+			extract($args);
+			if( $fork )
+			{
+				\ShellPHP\Process\Process::Run($GLOBALS['argv'][0],array('daemon'));
+				die("Went to Background");
+			}
+			$webinterface->go();
+		})
+		->end()
 	->command('update')
 		->text("Updates the movie database")
 		->handler(function($args)
