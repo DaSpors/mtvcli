@@ -2,51 +2,44 @@
 
 function update_list_urls($force=false)
 {
-	$list_file = SETTINGS_FOLDER.'/list_urls.txt';
-	if( !$force && !syncNeeded('list_urls',7*24) )
+	$urls = Settings::Get('list_urls',[]);
+	$force |= count($urls)==0;
+	$needs_update = $force || isNewer("http://zdfmediathk.sourceforge.net/akt.xml",lastSyncTime('list_urls'));
+	if( !$needs_update )
 		return;
-	@unlink($list_file);
 	
 	write("Getting new list URLs...");
+	$urls = [];
 	$content = downloadData("http://zdfmediathk.sourceforge.net/akt.xml");
-	if( !preg_match_all('|<url>(.+)</url>|i',$content,$matches) )
-		return;
-	
-	MovieListUrl::Truncate();
-	foreach( $matches[1] as $url )
-		MovieListUrl::Make()->set('url',$url)->set('type','akt')->Save();
-
-	$content = downloadData("http://zdfmediathk.sourceforge.net/diff.xml");
-	if( !preg_match_all('|<url>(.+)</url>|i',$content,$matches) )
-		return;
-	
-	foreach( $matches[1] as $url )
-		MovieListUrl::Make()->set('url',$url)->set('type','diff')->Save();
-		
+	if( preg_match_all('|<url>(.+)</url>|i',$content,$matches) )
+		Settings::Set('list_urls',$matches[1]);
 	storeSync('list_urls');
 }
 
 function update_movielist($force)
 {
-	$storage = \ShellPHP\Storage\Storage::Make();
-	
-	$doit = $force?$force:($storage->getSetting("next_movielist_update",1)<time());
-	if( !$doit )
-		return '';
-	
-	$listid = $storage->getSetting("current_movielist_id",'');
-	$listcheck = $storage->getSetting("current_movielist_check",'');
-	
 	$list_file = SETTINGS_FOLDER.'/movielist.xz';
+	$urls = Settings::Get('list_urls',[]);
+	shuffle($urls);
+	$url = array_pop($urls);
+	
+	$force |= count(glob(SETTINGS_FOLDER.'/movies.*.dat')) == 0;
+	if( !$force )
+	{
+		if( !isNewer("http://zdfmediathk.sourceforge.net/akt.xml",lastSyncTime('movielist')) )
+			return '';
+	}
+	
+	if( file_exists($list_file) )
+		@unlink($list_file);
 	if( file_exists($list_file.'.crap') )
-		return $list_file.'.crap';
+	{
+		if( filemtime($list_file.'.crap') > lastSyncTime('movielist') )
+			return $list_file.'.crap';
+		@unlink($list_file.'.crap');
+	}
 	
-	$url = MovieListUrl::Select()->eq('type',$listid?'diff':'akt')->shuffle()->scalar('url');
-	
-	if( $listid )
-		write("Getting updated movie list...");
-	else
-		write("Getting complete movie list...");
+	write("Getting updated movie list...");
 	
 	if( !downloadFile($url,$list_file) )
 		throw new Exception("Error getting the movie list.");
@@ -73,58 +66,27 @@ function update_movielist($force)
 	$regex = '/\"Filmliste\"\s+:\s+\[\s+\"(.*)\",\s+\"(.*)\",\s+\"(.*)\",\s+\"(.*)\",\s+\"(.*)\"\s+\]/U';
 	if( !preg_match($regex, $content, $match ) )
 		throw new Exception("Invalid movie list");
-	$newlistid = $match[5];
 	
-	if( !$listid )
-	{
-		$storage->setSetting("current_movielist_id",$newlistid);
-		$storage->setSetting("current_movielist_check",md5($match[0]));
-		$storage->setSetting("next_movielist_update",time()+3600);
-		return $list_file.'.crap';
-	}
-	if( $listid == $newlistid )
-	{
-		$storage->setSetting("next_movielist_update",time()+3600);
-		if( md5($match[0]) == $listcheck )
-		{
-			unlink($list_file.'.crap');
-			return '';
-		}
-		$storage->setSetting("current_movielist_check",md5($match[0]));
-		return $list_file.'.crap';
-	}
-	unlink($list_file.'.crap');
-	$storage->setSetting("current_movielist_id",'');
-	write("Invalid update file $listid != $newlistid");
-	return update_movielist($force);
+	storeSync('movielist');
+	return $list_file.'.crap';
 }
 
-function update_movies($force=false,$incremental=true,$age=0)
+function update_movies($force=false)
 {
 	update_list_urls($force);
-	if( !$force && !syncNeeded('movies',1) )
-		return;
-	
-	$age = intval($age);
-	$url = MovieListUrl::Select()->eq('type','diff')->shuffle()->scalar('url');
-	
 	$list_file = update_movielist($force);
 	if( !$list_file )
-	{
-		write("No new data found");
-		storeSync('movies');
 		return;
-	}
+	
+	$min_duration = Settings::Get('movies_min_length',180);
+	$max_age = time() - Settings::Get('movies_max_age',365) * 86400;
+	
 	
 	write("Importing movie list '$list_file' ...");
 	$file = new SplFileObject($list_file);
 	$length = $file->getSize(); $op = 0;
 	
-	$storage = \ShellPHP\Storage\Storage::Make();
-	$storage->exec("BEGIN TRANSACTION");
-	$sender = ''; $theme = ''; $chunksize = 50000; $counter = 0;
-	$new = $updated = 0;
-	$lastSync = lastSyncTime('movies');
+	$sender = ''; $theme = ''; $counter = 0;
 	
 	$validateURL = function($urlbase,$urlval)
 	{
@@ -136,81 +98,76 @@ function update_movies($force=false,$incremental=true,$age=0)
 	$regex = '/\"X\"\s+:\s+\[\s+\"(.*)\",\s+\"(.*)\",\s+\"(.*)\",\s+\"(.*)\",\s+\"(.*)\",\s+\"(.*)\",\s+\"(.*)\",\s+\"(.*)\",\s+\"(.*)\",\s+\"(.*)\",\s+\"(.*)\",\s+\"(.*)\",\s+\"(.*)\",\s+\"(.*)\",\s+\"(.*)\",\s+\"(.*)\",\s+\"(.*)\",\s+\"(.*)\",\s+\"(.*)\",\s+\"(.*)\"\s+\]/U';
 	$lines = array();
 	
-	\ShellPHP\Storage\Storage::StatClear();
-	$station = $channel = false;
+	$station = $channel = $title = false;
+	writeProgress(0,$length);
+	//$out = new SplFileObject(SETTINGS_FOLDER."/movies.0.new",'w');
+	
+	$chunksize = Settings::Get('movie_chunksize',10000);
+	
+	$chunk = [];
 	while( !$file->eof() )
 	{
 		$line = $file->fgets();
 		$line = str_replace('\"',"'",trim($line));
 		$lines[] = $line;
-		if( count($lines)<1000 && !$file->eof() )
+		if( count($lines)<100 && !$file->eof() )
 			continue;
 		
 		$content = implode("\n",$lines);
 		$lines = array();
-		//$start = microtime(true);
 		if( !preg_match_all($regex, $content, $matches, PREG_SET_ORDER ) )
 			continue;
-		//$start = \ShellPHP\Storage\Storage::StatCount("PREG",microtime(true)-$start);
 		
 		foreach( $matches as $vals )
 		{
-			if( $vals[1] ) $station = Station::Ensure($vals[1]);
-			if( $vals[2] ) $channel = Channel::Ensure($vals[2]);
-			
-			if( !$station || !$channel )
-				continue;
-			
-			$dur = 0;
+			$duration = 0;
 			foreach( array_reverse(explode(":",$vals[6])) as $i=>$v)
-				$dur += pow(60,$i) * intval($v);
-			$program = Program::Ensure($vals[3],$dur,$vals[10],$vals[8]);
-			if( !$program )
+				$duration += pow(60,$i) * intval($v);
+			if( $duration < $min_duration )
 				continue;
-			
+
 			$sent = trim(preg_replace('/(\d\d).(\d\d).(\d\d\d\d)/','$3-$2-$1',$vals[4]).' '.$vals[5]);
-			if( !$sent ) $sent = null;
-			
-			$broadcast = Broadcast::Ensure($station,$channel,$program,$sent);
-			if( !$broadcast )
+			if( !$sent )
+				continue;
+			$sent = strtotime($sent);
+			if( $sent < $max_age )
 				continue;
 			
-			$broadcast->AddVideo($validateURL($vals[9],$vals[13]),10);
-			$broadcast->AddVideo($vals[9],20);
-			$broadcast->AddVideo($validateURL($vals[9],$vals[15]),30);
+			if( $vals[1] ) $station = trim($vals[1]);
+			if( $vals[2] ) $channel = trim($vals[2]);
+			if( $vals[3] ) $title = trim($vals[3]);
 			
-			if( $broadcast->IsNew() )
-				$new++;
-			else
-				$updated++;
+			if( !$station || !$channel || !$title )
+				continue;
 			
-			if( $counter++ > $chunksize )
+			$description = $vals[8];
+			$bc = new Broadcast(compact('channel','title','station','sent','duration','description'));
+			$bc->id = $counter++;
+			$bc->AddStream(0,$validateURL($vals[9],$vals[13]));
+			$bc->AddStream(1,$vals[9]);
+			$bc->AddStream(2,$validateURL($vals[9],$vals[15]));
+			$chunk[$bc->id] = $bc;
+			//$out->fwrite("$bc,\n");
+			if( $counter % $chunksize == 0 )
 			{
-				$storage->exec("COMMIT");
-				//ShellPHP\Storage\Storage::StatsOut();
-				//die();
-				$storage->exec("BEGIN TRANSACTION");
-				$counter = 0;
+				//$out = new SplFileObject(SETTINGS_FOLDER."/movies.{$counter}.new",'w');
+				file_put_contents(SETTINGS_FOLDER."/movies.{$counter}.new", serialize($chunk));
+				$chunk = [];
 			}
 		}
 		writeProgress($file->ftell(),$length);
 	}
-	$storage->exec("COMMIT");
 	writeProgress($length,$length);
+	$out = null;
 	$file = null;
-
-	write("Updated $updated movies, added $new ones.");
+	
 	write("Cleaning up...");
 	@unlink($list_file);
-	if( $age > 0 )
-	{
-		$oldest = date("Y-m-d H:i:s",strtotime("-$age day"));
-		$storage->exec("DELETE FROM movies WHERE sent<'$oldest'");
-		$storage->exec("VACUUM");
-	}
-	elseif( time()-$lastSync > 7*86400 )
-		$storage->exec("VACUUM");
-	
-	storeSync('movies');
-	ShellPHP\Storage\Storage::StatsOut();
+	foreach( glob(SETTINGS_FOLDER.'/movies.*.dat') as $f )
+		unlink($f);
+	foreach( glob(SETTINGS_FOLDER.'/movies.*.new') as $f )
+		rename($f,str_replace('.new','.dat',$f));
+
+	Settings::Set('movie_count',$counter);
+	write("Database now contains $counter movies.");
 }

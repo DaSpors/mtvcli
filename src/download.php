@@ -1,99 +1,119 @@
 <?php
 
+function _getBroadcastById($id)
+{
+	$bc = Broadcast::Find($id);
+	if( !$bc )
+		write("Movie $id not found");
+	return $bc;
+}
+
 function get($id)
 {
-	foreach( Broadcast::Select()->in('id',explode(",",$id))->results() as $bc ) 
+	$bc = _getBroadcastById($id);
+	if( $bc )
 	{
-		$dl = $bc->queue();
-		if( $dl ) $dl->start();
+		Downloads::Queue($bc);
+		Downloads::Start($bc,'.');
 	}
 }
 
 function skip($id)
 {
-	Broadcast::Select()->in('id',explode(",",$id))->each(function($bc)
-	{
-		$dl = $bc->queue();
-		if( $dl ) $dl->skip();
-	});
+	$bc = _getBroadcastById($id);
+	if( $bc )
+		Downloads::Skip($bc);
 }
 
 function add($id)
 {
-	Broadcast::Select()->in('id',explode(",",$id))->each(function($bc)
-	{
-		$dl = $bc->queue();
-	});
+	$bc = _getBroadcastById($id);
+	if( $bc )
+		Downloads::Queue($bc);
 }
 
 function remove($id)
 {
-	Download::Select()->in('broadcast_id',explode(",",$id))->each(function($dl){ $dl->Delete(); });
+	$bc = _getBroadcastById($id);
+	if( $bc )
+		Downloads::Remove($bc);
 }
 
 function clear()
 {
-	Download::Select()->isNull('finished')->each(function($dl){ $dl->Delete(); });
+	Downloads::Clear();
 }
 
 function subscribe($name,$folder,$id)
 {
 	$name = trim($name);
 	$id = intval($id);
+	$searches = Settings::Get('searches',[]);
 	
 	if( $id )
-		$search = Search::Select()->eq('id',$id)->current();
+		$search = isset($searches[$id])?$searches[$id]:false;
 	else
-		$search = Search::Select()->orderBy('searched DESC')->current();
+		$search = array_pop($searches);
 	
 	if( !$search )
-		throw new Exception("Search not found");
-	
-	$sub = Subscription::Select()->eq('name',$name)->current();
-	if( !$sub )
-		$sub = Subscription::Make();
-	
-	$sub->set('name',$name)
-		->set('folder',$folder)
-		->set('pattern',$search->pattern)
-		->set('min_duration',$search->min_duration)
-		->set('station',$search->station)
-		->set('skip_title',$search->skip_title)
-		->set('skip_channel',$search->skip_channel)
-		->Save();
+	{
+		write("Recent search not found");
+		return;
+	}
+
+	unset($search['searched']);
+	$search = array_merge(compact('name','folder'),$search);
+	Settings::Append('subscriptions',$search);
 	
 	write("Subscription added");	
 }
 
 function sub_list()
 {	
-	startTable(array('Name','Folder','Pattern','Min duration','Station','Skip title','Skip channel'));
-	Subscription::Select()->oderBy('name')->each(function($sub)
+	$subs = Settings::Get('subscriptions',[]);
+	
+	if( count($subs) == 0 )
 	{
-		$row = $sub->get('name','folder','pattern','min_duration','station','skip_title','skip_channel');
+		write("No subscriptions");
+		return;
+	}
+	
+	startTable(array('Name','Folder','Pattern','Min duration','Station','Skip title','Skip channel','Skip description'));
+	foreach( $subs as $id=>$sub )
+	{
+		$row = array_values($sub);
+		$row[3] = formatDuration($row[3]);
 		addTableRow($row);
-	});
+	};
 	flushTable();
 }
 
 function down_list()
 {	
+	write("ToBeDone");
+	return;
 	startTable(array('ID','Filename','Progress','Started','Message'));
-	Download::Select()->isNull('finished')->oderBy('started DESC')->oderBy('filename')->each(function($dl)
+	foreach( Downloads::ListQueue() as $bc )
 	{
 		$row = $dl->get('broadcast_id','filename','downloaded','started','message');
 		$row['downloaded'] = $row['downloaded']?sprintf("%3d",$row['downloaded'])."%":'';
 		addTableRow($row);
-	});
+	};
 	flushTable();
 }
 
 function unsubscribe($name)
 {
-	$sub = Subscription::Select()->eq('name',trim($name))->current();
-	if( $sub )
+	$name = trim($name);
+	$old = Settings::Get('subscriptions',[]);
+	$subs = [];
+	foreach( $old as $sub )
+		if( $sub->name != $name )
+			$subs[] = $sub;
+	
+	if( count($old) != count($subs) )
 	{
-		$sub->Delete();
+		Settings::Set('subscriptions',$subs);
 		write("Subscription removed");
 	}
 	else
@@ -103,14 +123,22 @@ function unsubscribe($name)
 function sub_run($name)
 {
 	$name = trim($name);
-	$sub = $name?Subscription::Select()->eq('name',$name):Subscription::Select();
-	$sub->orderBy('name')->each(function($subscription)
+	$subs = []; $bcs = [];
+	foreach( Settings::Get('subscriptions',[]) as $sub )
 	{
-		write("Processing subscription {$subscription->name}...");
-		$subscription->QueueDownloads();
-	});
-
-	write("Starting downloads...");
-	foreach( Download::Select()->isNull('finished')->isNull('stopped')->isNull('pid')->results() as $dl )
-		$dl->start();
+		if( $name && $sub->name != $name )
+			continue;
+		write("Processing subscription {$sub['name']}...");
+		foreach( Broadcast::Search($sub,100) as $bc )
+		{
+			if( !Downloads::IsFinished($bc) )
+				$bcs[] = [$bc,$sub['folder']];
+		}
+	}	
+	foreach( $bcs as $i=>$bc )
+	{
+		$i++;
+		write("\nStarting download $i/".count($bcs)."...");
+		Downloads::Start($bc[0],$bc[1]);
+	}
 }

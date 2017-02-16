@@ -1,68 +1,48 @@
 <?php
 
-function search($pattern,$min_duration,$fields)
+function search($pattern,$min_duration,$station,$skip_title,$skip_channel,$skip_desc)
 {
-	startTable(array('ID','Sent','Duration','Sender','Theme','Title'));
-	Movie::Search($pattern,$min_duration,$fields)->each(function($movie)
-	{
-		$row = $movie->get('id','sent','duration','sender','theme','title');
-		$row['duration'] = formatDuration($row['duration']);
-		addTableRow($row);
-	});
-	flushTable();
-}
-
-function search2($pattern,$min_duration,$station,$skip_title,$skip_channel)
-{
-	if( $skip_title && $skip_channel )
+	if( $skip_title && $skip_channel && $skip_desc )
 		throw new Exception("Cannot search nowhere");
 	
-	$s = Search::Ensure($pattern,$min_duration,$station,$skip_title,$skip_channel);
+	$dur = 0;
+	foreach( array_reverse(explode(":",$min_duration)) as $i=>$v)
+		$dur += pow(60,$i) * intval($v);
+	$min_duration = $dur;
 	
-	startTable(array('ID','Sent','Duration','Station','Channel','Title'));
-	foreach( $s->Perform()->results() as $bc )
+	$searched = time();
+	$search = compact('searched','pattern','min_duration','station','skip_title','skip_channel','skip_desc');
+	Settings::Append('searches',$search,10);
+	
+	startTable(array('ID','Station','Channel','Title','Sent','Duration'),101);
+	foreach( Broadcast::Search($search,100) as $bc )
 	{
-		$row = array();
-		$p = Program::Select()->eq('id',$bc->program_id)->current();
-		if( $p->duration < $min_duration )
-			continue;
-		$row[] = $bc->id;
-		$row[] = $bc->sent;
-		$row[] = formatDuration($p->duration);
-		$row[] = Station::Select()->eq('id',$bc->station_id)->scalar('name');
-		$row[] = Channel::Select()->eq('id',$bc->channel_id)->scalar('name');
-		$row[] = $p->name;
+		$row = [$bc->id,$bc->station,$bc->channel,$bc->title,date("Y-m-d H:i:s",$bc->sent),formatDuration($bc->duration)];
 		addTableRow($row);
 	}
 	flushTable();
 }
 
-/*
-function details($id)
-{
-	Movie::Select()->in('id',explode(",",$id))->each(function($movie)
-	{
-		write("Movie {$movie}: ",$row);
-		write("Selected URL",$movie->selectUrl());
-	});
-}
-*/
-
 function recent($id,$delete,$clear)
 {
+	$searches = Settings::Get('searches',[]);
+	
 	if( $delete )
 	{
-		if( !$id )
+		if( !is_numeric($id) )
 			throw new Exception("Missing argument: id");
 		
-		Search::Select()->in('id',explode(",",$id))->each(function($s){ $s->Delete(); });
+		$ids = array_map(function($i){ return intval(trim($i)); },explode(",",$id));
+		rsort($ids);
+		foreach( $ids as $i )
+			unset($searches[$i]);
+		Settings::Set('searches',$searches);
 		write("Search(es) removed");
-		return;
 	}
 	
 	if( $clear )
 	{
-		Search::Truncate();
+		Settings::Set('searches',[]);
 		write("All searches removed");
 		return;
 	}
@@ -70,18 +50,51 @@ function recent($id,$delete,$clear)
 	$id = intval($id);
 	if( $id )
 	{
-		$search = Search::Select()->eq('id',$id)->current();
+		$search = isset($searches[$id])?$searches[$id]:false;
 		if( !$search )
 			throw new Exception("Recent search not found");
-		search2($search['pattern'],$search['min_duration'],$search['station'],$search['skip_title'],$search['skip_channel']);
+		search($search['pattern'],$search['min_duration'],$search['station'],$search['skip_title'],$search['skip_channel'],$search['skip_desc']);
 		return;
 	}
 	
-	startTable(array('ID','DateTime','Pattern','Min duration','Station','Skip title','Skip channel'));
-	Search::Select()->orderBy('searched DESC')->each(function($search)
+	if( count($searches) == 0 )
 	{
-		$row = $search->get('id','searched','pattern','min_duration','station','skip_title','skip_channel');
+		write("No recent searches");
+		return;
+	}
+	
+	startTable(array('ID','DateTime','Pattern','Min duration','Station','Skip title','Skip channel','Skip description'));
+	foreach( $searches as $id=>$search )
+	{
+		$row = array_values($search);
+		array_unshift($row,$id);
+		$row[1] = date("Y-m-d- H:i:s",$row[1]);
+		$row[3] = formatDuration($row[3]);
 		addTableRow($row);
-	});
+	};
 	flushTable();
+}
+
+function details($id)
+{
+	foreach( explode(",",$id) as $id )
+	{
+		$bc = Broadcast::Find($id);
+		if( !$bc )
+		{
+			write("");
+			write("Movie $id not found.");
+			continue;
+		}
+		
+		$desc = wordwrap($bc->description,75,"\n    ",true);
+		write("");
+		write("Movie $id details:");
+		write("  Station   ".$bc->station);
+		write("  Channel   ".$bc->channel);
+		write("  Title     ".$bc->title);
+		write("  Sent      ".date("Y-m-d H:i:s",$bc->sent));
+		write("  Duration  ".formatDuration($bc->duration));
+		write("  Description\n    ".$desc);
+	}
 }

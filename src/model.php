@@ -1,307 +1,365 @@
 <?php
 
-class Movie extends \ShellPHP\Storage\StoredObject
+class Settings 
 {
-	public static function GetTableName(){ return 'movies'; }
+	private static $inst = false;
+	private static $file = SETTINGS_FOLDER.'/mtvcli.json';
 	
-	public $id = 'int primary autoinc';
-	public $hash = 'text unique';
-	public $sender = 'text unique sender_theme_title_sent';
-	public $theme = 'text unique sender_theme_title_sent';
-	public $title = 'text unique sender_theme_title_sent';
-	public $sent = 'datetime unique sender_theme_title_sent';
-	public $duration = 'int';
-	public $size = 'int';
-	public $url_low = 'text';
-	public $url_mid = 'text';
-	public $url_high = 'text';
-	public $website = 'text';
-	public $description = 'text';	
-	
-	public static function Search($pattern,$min_duration,$fields)
+	public function __construct($file=false)
 	{
-		$fields = sanitizeFields($fields);
-		$min_duration = intval($min_duration);
-		
-		$q = Movie::Select()
-			->gte('duration',$min_duration)
-			->any();
-		foreach( $fields as $f )
-			$q->like($f,$pattern);
-
-		$fields = implode(",",$fields);
-		Search::Make(compact('pattern','min_duration','fields'))
-			->set('searched','__NOW__')->Save(true);
-			
-		return $q;
-	}
-	
-	public function selectUrl($quality='mhl')
-	{
-		foreach( str_split(strtolower($quality)) as $q )
+		if( !$file )
+			$file = self::$file;
+		if( file_exists($file) )
 		{
-			if( $q=='h' && isset($this->url_high) && $this->url_high )
-				return $this->url_high;
-			if( $q=='m' && isset($this->url_mid) && $this->url_mid )
-				return $this->url_mid;
-			if( $q=='l' && isset($this->url_low) && $this->url_low )
-				return $this->url_low;
+			foreach( json_decode(file_get_contents($file),true) as $k=>$v )
+				$this->$k = $v;
 		}
-		return '';
 	}
 	
-	public function makeFilename()
+	private static function _instance()
 	{
-		$url = $this->url_mid;
-		if( strcasecmp($this->sender,$this->theme) != 0 )
-			$name = $this->theme." - ".$this->title.".".pathinfo($url,PATHINFO_EXTENSION);
-		else
-			$name = $this->title.".".pathinfo($url,PATHINFO_EXTENSION);
-		$name = str_replace(array('ä','ö','ü','Ä','Ö','Ü','ß'),array('ae','oe','ue','Ae','Oe','Ue','ss'),$name);
-		$name = preg_replace('/[^a-z0-9\._-]/i',' ',$name);
-		while( strpos($name,'  ') !== false )
-			$name = str_replace('  ',' ',$name);
-		return $name;
+		if( !self::$inst )
+			self::$inst = new Settings();
+		return self::$inst;
 	}
 	
-	public function getByteSize()
+	private function _save()
 	{
-		return intval($this->size) * 1024 * 1024;
+		file_put_contents(self::$file,json_encode(self::_instance(),JSON_PRETTY_PRINT));
 	}
 	
-	public function queue($folder='.', $quality='mhl')
+	static function Get($name,$default=false)
 	{
-		$url = $this->selectUrl($quality);
-		if( !$url )
-			return;
-		if( Download::Select()->eq('url',$url)->count() > 0 )
-			return Download::Select()->eq('url',$url)->current();
-		
-		$res = Download::Make(array(
-			'movie_id' => $this->id,
-			'url' => $url,
-			'filename' => realpath($folder)."/".$this->makeFilename(),
-			'size' => $this->getByteSize(),
-			'queued' => '__NOW__'
-		));
-		$res->Save();
-		write("Movie queued for download: '$this'");
-		return $res;
+		$i = self::_instance();
+		if( isset($i->$name) )
+			return $i->$name;
+		return $default;
 	}
 	
-	public function __toString()
+	static function Set($name,$value)
 	{
-		return "{$this->title}";
+		$i = self::_instance();
+		$i->$name = $value;
+		$i->_save();
+	}
+	
+	static function Append($name,$value,$limit=false)
+	{
+		$i = self::_instance();
+		if( !isset($i->$name) )
+			$i->$name = [];
+		if( !is_array($i->$name) )
+			$i->$name = [$i->$name];
+		array_push($i->$name,$value);
+		if( $limit !== false )
+			while( count($i->$name)>$limit )
+				array_shift($i->$name);
+		$i->_save();
 	}
 }
 
-class MovieListUrl extends \ShellPHP\Storage\StoredObject
+class Downloads
 {
-	public $url = 'text primary';
-	public $type = 'text';
-}
-
-class Search extends \ShellPHP\Storage\StoredObject
-{
-	public static function GetTableName(){ return 'searches'; }
+	private static $inst = false;
+	private static $file = SETTINGS_FOLDER.'/downloads.json';
 	
-	public $id           = 'int primary autoinc';
-	public $searched     = 'datetime';
-	public $pattern      = 'text unique complete';
-	public $min_duration = 'int unique complete';
-	public $station      = 'text unique complete';
-	public $skip_title   = 'bool unique complete';
-	public $skip_channel = 'bool unique complete';
+	public $queue = [];
+	public $finished = [];
+	public $errors = [];
 	
-	public static function Ensure($pattern,$min_duration,$station,$skip_title,$skip_channel)
+	private function __construct()
 	{
-		$s = Search::Select()
-			->eq('pattern',$pattern)
-			->eq('min_duration',$min_duration)
-			->eq('station',$station)
-			->eq('skip_title',$skip_title)
-			->eq('skip_channel',$skip_channel)
-			->current();
-		if( $s )
-			return $s;
-		$s = Search::Make()
-			->set('pattern',$pattern)
-			->set('min_duration',$min_duration)
-			->set('station',$station)
-			->set('skip_title',$skip_title)
-			->set('skip_channel',$skip_channel);
-		$s->Save();
-		return $s;
-	}
-	
-	public function Perform()
-	{
-		$this->searched = '__NOW__';
-		$this->Save();
-		
-		if( $this->skip_title && $this->skip_channel )
-			throw new Exception("Cannot search nowhere");
-		
-		$q = Broadcast::Select()
-			->resolveFK('s','station_id','stations')
-			->resolveFK('c','channel_id','channels')
-			->resolveFK('p','program_id','programs')
-			->gte('p.duration',intval($this->min_duration))
-			->gt("(SELECT count(*) FROM videos WHERE videos.broadcast_id=id)",0,false,false);
-			
-		if( $this->station )
-			$q->eq('s.name',$this->station);
-		
-		$q->any();
-		
-		if( !$this->skip_title )
-			$q->like('p.name',$this->pattern);
-		if( !$this->skip_channel )
-			$q->like('c.name',$this->pattern);
-		return $q;
-	}
-}
-
-class Subscription extends \ShellPHP\Storage\StoredObject
-{
-	public $name      = 'text primary';
-	public $folder      = 'text';
-	public $searched     = 'datetime';
-	public $pattern      = 'text';
-	public $min_duration = 'int';
-	public $station      = 'text';
-	public $skip_title   = 'int';
-	public $skip_channel = 'int';
-	
-	public function QueueDownloads()
-	{
-		$s = Search::Ensure($this->pattern,$this->min_duration,$this->station,$this->skip_title,$this->skip_channel);
-		foreach( $s->Perform()->results() as $bc )
-			$bc->queue($this->folder);
-	}
-}
-
-class Download extends \ShellPHP\Storage\StoredObject
-{
-	public $broadcast_id = 'int primary';
-	public $url = 'text unique';
-	public $filename = 'text';
-	public $size = 'int';
-	public $downloaded = 'int';
-	public $pid = 'int';
-	public $queued = 'datetime';
-	public $started = 'datetime';
-	public $finished = 'datetime';
-	public $stopped = 'datetime';
-	public $message = 'text';
-	
-	private $bytes_done = 0;
-	private $_buffer = array();
-	
-	public function getBroadcast()
-	{
-		if( !isset($this->_buffer['bc']) )
-			$this->_buffer['bc'] = Broadcast::Select()->eq('id',$this->broadcast_id)->current();
-		return $this->_buffer['bc'];
-	}
-	
-	public static function Cleanup()
-	{
-		try
+		if( file_exists(self::$file) )
 		{
-			Download::Select()->notNull('pid')->each(function($dl)
+			foreach( json_decode(file_get_contents(self::$file),true) as $k=>$v )
+				$this->$k = $v;
+		}
+	}
+	
+	private static function _instance()
+	{
+		if( !self::$inst )
+			self::$inst = new Downloads();
+		return self::$inst;
+	}
+	
+	private static function _ifIn($obj,$array,$callback=false)
+	{
+		$i = self::_instance();
+		foreach( $i->$array as $index=>$o )
+			if( $obj->equals($o) )
 			{
-				if( \ShellPHP\Process\Process::running($dl->pid) )
-					return;
-				$dl->set('pid',null)->Save();
-			});
-		}catch(Exception $ex){}
+				if( $callback )
+					$callback($i,$obj,$index);
+				return $index;
+			}
+		return false;
 	}
 	
-	public function stop($message)
+	private static function _ifNotIn($obj,$array,$callback=false)
 	{
-		write("Download stopped: $message");
-		return $this->set('stopped',"__NOW__")->set('pid',null)->set('message',$message)->Save();
+		$i = self::_instance();
+		foreach( $i->$array as $index=>$o )
+			if( $obj->equals($o) )
+				return $index;
+		if( $callback )
+			$callback($i,$obj);
+		return false;
 	}
 	
-	public function skip()
+	private function _save()
 	{
-		return $this->set('finished',"__NOW__")->set('pid',null)->set('message','skipped')->Save();
+		file_put_contents(self::$file,json_encode(self::_instance(),JSON_PRETTY_PRINT));
 	}
 	
-	private function reQueue($message)
+	public static function Queue($bc)
 	{
-		$this->stop($message);
-		write("Removing invalid URL, trying to re-queue");
-		$vid = Video::Select()->eq('url',$this->url)->current();
-		if( $vid ) $vid->Delete();
-		
-		$bc = $this->getBroadcast();
-		$bc->queue(dirname($this->filename));
+		self::_ifNotIn($bc,'queue',function($i,$obj)
+		{
+			$i->queue[] = $obj;
+			$i->_save();
+		});
 	}
 	
-	public function start($fork=false)
+	public static function ListQueue()
 	{
-		$this->set('started',"__NOW__")
-			->set('finished',null)
-			->set('stopped',null)
-			->set('message',null)
-			->set('pid',getmypid())
-			->Save();
-		
-		$bc = $this->getBroadcast();
-		if( !$bc )
-			return $this->stop('Program not found');
+		$i = self::_instance();
+		return $i->queue;
+	}
+	
+	public static function Remove($bc)
+	{
+		self::_ifIn($bc,'queue',function($i,$obj,$index)
+		{
+			array_splice($i->queue,$index,1);
+			$i->_save();
+			$i->_save();
+		});
+	}
+	
+	public static function Skip($bc)
+	{
+		self::_ifNotIn($bc,'finished',function($i,$obj)
+		{
+			$i->finished[] = $obj;
+			$i->_save();
+		});
+	}
+	
+	public static function Error($bc)
+	{
+		self::_ifNotIn($bc,'errors',function($i,$obj)
+		{
+			$i->errors[] = $obj;
+			$i->_save();
+		});
+	}
+	
+	public static function Finished($bc)
+	{
+		self::Remove($bc);
+		self::Skip($bc);
+	}
+	
+	public static function Clear()
+	{
+		$i = self::_instance();
+		$i->queue = [];
+		$i->_save();
+	}
+	
+	public static function IsFinished($bc)
+	{
+		return self::_ifIn($bc,'finished') !== false;
+	}
+	
+	public static function Start($bc,$folder,$fork=false)
+	{
+		$i = self::_instance();
 		
 		$id   = $bc->id;
-		$url  = $this->url;
-		$file = $this->filename;
+		$url  = $bc->selectStream();
+		$file = $folder.'//'.$bc->makeFilename($url);
 		
 		write("");
 		write("Downloading movie $id");
-		write("  Station  ".$bc->getStation()->name);
-		write("  Channel  ".$bc->getChannel()->name);
-		write("  Title    ".$bc->getProgram()->name);
+		write("  Station  ".$bc->station);
+		write("  Channel  ".$bc->channel);
+		write("  Title    ".$bc->title);
 		write("  URL      $url");
 		write("  Filename $file");
 		
 		if( file_exists($file) )
-			$this->bytes_done = filesize($file);
-		$this->storage = \ShellPHP\Storage\Storage::Make();
-		$result = downloadFile($url,$file,array($this,'downloadProgress'));
+			$i->bytes_done = filesize($file);
+		else
+			$i->bytes_done = 0;
+		
+		$result = downloadFile($url,$file,array('Downloads','downloadProgress'));
 		
 		if( !$result )
 		{
 			@rename($file,"$file.error");
 			write("Error downloading movie: $url");
-			return $this->reQueue('download error');
+			self::Error($bc,'download error');
+			return false;
 		}
 		if( filesize($file) < 100 && stripos(trim(file_get_contents($file)),'not found')!==false )
 		{
 			unlink($file);
 			write("File not found: $url");
-			return $this->reQueue('not found');
+			self::Error($bc,'not found');
+			return false;
 		}
-		return $this->set('finished',"__NOW__")->set('pid',null)->set('message','ok')->Save();
+		
+		self::Finished($bc);
+		
+		return true;
 	}
 	
-	function downloadProgress($resource,$download_size, $downloaded, $upload_size, $uploaded)
+	public static function downloadProgress($resource,$download_size, $downloaded, $upload_size, $uploaded)
 	{
 		if( $download_size == 0 )
 			return;
-		$download_size += $this->bytes_done;
-		$downloaded += $this->bytes_done;
-		$p = floor($downloaded * 100 / $download_size);
-		if( $p != $this->downloaded )
-		{
-			try
-			{
-				$this->downloaded = $p;
-				$this->storage->exec(
-					"UPDATE downloads SET size=$download_size, downloaded=$p WHERE url='{$this->url}'",
-					false,false,false);
-			}catch(Exception $ex){}
-		}
+		$i = self::_instance();
+		$download_size += $i->bytes_done;
+		$downloaded += $i->bytes_done;
 		writeProgress($downloaded,$download_size);
+	}
+}
+
+class Broadcast
+{
+	private static $fieldMap = ['id'=>'a','channel'=>'b','title'=>'c','station'=>'d','sent'=>'e','duration'=>'f','description'=>'g','streams'=>'h'];
+	public $id;
+	public $channel;
+	public $title;
+	public $station;
+	public $sent;
+	public $duration;
+	public $description;
+	public $streams = [];
+	
+	public function __construct($data=[])
+	{
+		$map = array_flip(self::$fieldMap);
+		if( is_string($data) )
+			$data = json_decode($data,true);
+		
+		foreach( $data as $k=>$v )
+		{
+			if( isset($map[$k]) ) $k = $map[$k];
+			$this->$k = $v;
+		}
+	}
+	
+	public function equals($o)
+	{
+		$o = (object)$o;
+		if( !isset($o->channel) || !isset($o->title) )
+			return false;
+		return md5($this->channel.$this->title) == md5($o->channel.$o->title);
+	}
+	
+	public static function Make($channel,$title,$more_data=[])
+	{
+		$id = md5($channel.$title);
+		$bc = new Broadcast(array_merge($more_data,compact('id','channel','title')));
+		return $bc;
+	}
+	
+	public static function Each($callback)
+	{
+		$done = 0;
+		$total = Settings::Get('movie_count',500000);
+		foreach( glob(SETTINGS_FOLDER.'/movies.*.dat') as $file )
+		{
+			$chunk = unserialize(file_get_contents($file));
+			foreach( $chunk as $id=>$bc )
+			{
+				if( $callback($bc,$done++,$total) === false )
+					return;
+			}
+		}
+	}
+	
+	public static function Find($id)
+	{
+		$chunksize = Settings::Get('movie_chunksize',10000);
+		foreach( glob(SETTINGS_FOLDER.'/movies.*.dat') as $file )
+		{
+			$parts = explode(".",$file);
+			$max = intval($parts[count($parts)-2]);
+			if( $id > $max || $id < $max-$chunksize )
+				continue;
+			
+			$chunk = unserialize(file_get_contents($file));
+			return isset($chunk[$id])?$chunk[$id]:false;
+		}
+	}
+	
+	public static function Search($search,$limit=false)
+	{
+		$res = [];
+		extract($search);
+		self::Each(function($bc,$done,$total)use(&$res,$limit,$pattern,$min_duration,$station,$skip_title,$skip_channel,$skip_desc)
+		{
+			writeProgress($done,$total);
+			if( $bc->duration < $min_duration )
+				return;
+			$hit = false;
+			if( !$skip_desc )
+				$hit |= stripos($bc->description,$pattern) !== false;
+			if( !$skip_title )
+				$hit |= stripos($bc->title,$pattern) !== false;
+			if( !$skip_channel )
+				$hit |= stripos($bc->channel,$pattern) !== false;
+			if( $station )
+				$hit &= stripos($bc->station,$station) !== false;
+			if( !$hit )
+				return;
+			
+			$res[] = $bc;
+			if( $limit && count($res) >= $limit )
+			{
+				write("Search limit $limit reached");
+				return false;
+			}
+		});
+		writeProgress(100,100);
+		return $res;
+	}
+		
+	public function __toString()
+	{
+		$row = [];
+		foreach( get_object_vars($this) as $k=>$v )
+			$row[self::$fieldMap[$k]] = $v;
+		return json_encode($row);
+	}
+	
+	public function AddStream($quality,$url)
+	{
+		$this->streams[$quality] = $url;
+	}
+	
+	public function selectStream()
+	{
+		foreach( [1,0,2] as $q )
+			if( $this->streams[$q] )
+				return $this->streams[$q];
+		return false;
+	}
+	
+	public function makeFilename($url)
+	{
+		if( strcasecmp($this->station,$this->channel) != 0 )
+			$name = $this->channel." - ".$this->title.".".pathinfo($url,PATHINFO_EXTENSION);
+		else
+			$name = $this->title.".".pathinfo($url,PATHINFO_EXTENSION);
+		$name = str_replace(array('ä','ö','ü','Ä','Ö','Ü','ß'),array('ae','oe','üe','Ae','Oe','Ue','ss'),$name);
+		$name = preg_replace('/[^a-z0-9\._-]/i',' ',$name);
+		while( strpos($name,'  ') !== false )
+			$name = str_replace('  ',' ',$name);
+		return $name;
 	}
 }

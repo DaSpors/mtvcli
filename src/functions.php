@@ -54,9 +54,17 @@ function formatDuration($duration)
 	return \ShellPHP\CmdLine\Format::duration($duration);
 }
 
+function loadSettings()
+{
+	$file = SETTINGS_FOLDER.'/mtvcli.json';
+	if( !file_exists($file) )
+		return new stdClass();
+	return json_decode(file_get_contents($file));
+}
+
 function lastSyncTime($part)
 {
-	return \ShellPHP\Storage\Storage::Make()->getSetting("last_sync_$part",0);
+	return Settings::Get("last_sync_$part",0);
 }
 
 function syncNeeded($part,$max_age_in_hours)
@@ -67,7 +75,7 @@ function syncNeeded($part,$max_age_in_hours)
 
 function storeSync($part)
 {
-	\ShellPHP\Storage\Storage::Make()->setSetting("last_sync_$part",time());
+	Settings::Set("last_sync_$part",time());
 }
 
 function sanitizeFields($fields)
@@ -86,6 +94,18 @@ function sanitizeQuality($quality)
 	if( strlen($quality) != 3 )
 		throw new Exception("Invalid value for 'quality'. Allowed is a combination of 'h','m','l' with exactly three chars.");
 	return $quality;
+}
+
+function isNewer($url,$last_time)
+{
+	$h = implode("\n",get_headers($url));
+	if( preg_match("/Last-Modified: (.*)/", $h, $m) )
+	{
+		$dt = strtotime($m[1]);
+		if( $dt > $last_time )
+			return true;
+	}
+	return false;
 }
 
 function downloadData($url, $postdata=false, $request_timeout=120)

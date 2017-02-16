@@ -3,14 +3,9 @@
 require_once(__dir__.'/shellphp/shellphp.php');
 require_once(__DIR__.'/functions.php');
 require_once(__DIR__.'/model.php');
-require_once(__DIR__.'/model2.php');
 require_once(__dir__.'/update.php');
 
 date_default_timezone_set("Europe/Berlin");
-
-\ShellPHP\Storage\Storage::Make(SETTINGS_FOLDER.'/mtvcli.db');
-Download::Cleanup();
-//\ShellPHP\Storage\Storage::Make()->exec("VACUUM");
 
 //$webinterface = \ShellPHP\WebInterface\WebInterface::Make('0.0.0.0')
 //	->index(__DIR__."/web")
@@ -37,7 +32,6 @@ Download::Cleanup();
 //		return \ShellPHP\WebInterface\WebResponse::Json($res);
 //	});
 
-write("DB: ".SETTINGS_FOLDER.'/mtvcli.db');
 $cli = \ShellPHP\CmdLine\CmdLine::Make("MediathekView CLI","Version 0.0.0.1")
 	->setName('mtvcli')
 //	->command('daemon')
@@ -67,6 +61,7 @@ $cli = \ShellPHP\CmdLine\CmdLine::Make("MediathekView CLI","Version 0.0.0.1")
 		->opt('-s','')->alias('--station')->map('station')->text('Limit search to station')
 		->flag('-t')->alias('--title')->map('skip_title')->text('Do not search in program names')
 		->flag('-c')->alias('--channel')->map('skip_channel')->text('Do not search in channel names')
+		->flag('-b')->alias('--desc')->map('skip_desc')->text('Do not search in descriptions')
 		//->opt('-f','sender,theme,title')->alias('--fields')->map('fields')->text('Fields to search in. Possible values are: sender,theme,title')
 		->arg('pattern')->text("Substring to search for. Just substring, no pattern supported yet")
 		->handler(function($args)
@@ -75,20 +70,20 @@ $cli = \ShellPHP\CmdLine\CmdLine::Make("MediathekView CLI","Version 0.0.0.1")
 			extract($args);
 			require_once(__dir__.'/search.php');
 			$start = microtime(true);
-			search2($pattern,$min_duration,$station,$skip_title,$skip_channel);
+			search($pattern,$min_duration,$station,$skip_title,$skip_channel,$skip_desc);
 			write("time needed: ".( round((microtime(true)-$start)*1000,0) )."ms");
 		})
 		->end()
-//	->command('details')
-//		->text("Shows details for a specific movie")
-//		->arg('id')->text("Movie ID as returned by a search (or a comma-separated list of IDs)")
-//		->handler(function($args)
-//		{
-//			extract($args);
-//			require_once(__dir__.'/search.php');
-//			details($id);
-//		})
-//		->end()
+	->command('details')
+		->text("Shows details for a specific movie")
+		->arg('id')->text("Movie ID as returned by a search (or a comma-separated list of IDs)")
+		->handler(function($args)
+		{
+			extract($args);
+			require_once(__dir__.'/search.php');
+			details($id);
+		})
+		->end()
 	->command('recent')
 		->text("Shows a list of recent searches")
 		->flag('-d')->alias('--delete')->map('delete')->text('Remove the recent search(es) given by ID')
