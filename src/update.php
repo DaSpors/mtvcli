@@ -62,10 +62,27 @@ function update_movielist($force)
 	shell_exec($cmd);
 	@unlink($list_file);
 	
+	/*
 	$content = file_get_contents($list_file.'.crap',false,null,-1,1024);
-	$regex = '/\"Filmliste\"\s+:\s+\[\s+\"(.*)\",\s+\"(.*)\",\s+\"(.*)\",\s+\"(.*)\",\s+\"(.*)\"\s+\]/U';
+	$regex = '/\"Filmliste\"\s*:\s*\[\s*\"(.*)\",\s*\"(.*)\",\s*\"(.*)\",\s*\"(.*)\",\s*\"(.*)\"\s*\]/U';
 	if( !preg_match($regex, $content, $match ) )
-		throw new Exception("Invalid movie list");
+		throw new Exception("Invalid movie list ($list_file.crap)");
+	*/
+	$fin = fopen($list_file.'.crap',"r");
+	$fout = $list_file.'.lines';
+	$chunk = "";
+	while( ($buffer = fgets($fin, 4096)) !== false)
+	{
+		$chunk = str_replace('"X":',"\n",$chunk . $buffer);
+		if( strlen($chunk)>1000 )
+		{
+			file_put_contents($fout,substr($chunk,0,980),FILE_APPEND);
+			$chunk = substr($chunk,980);
+		}
+    }
+	if( strlen($chunk)>0 )
+		file_put_contents($fout,$chunk,FILE_APPEND);
+	fclose($fin);
 	
 	storeSync('movielist');
 	return $list_file.'.crap';
@@ -95,12 +112,12 @@ function update_movies($force=false)
 		return substr($urlbase,0,intval($m[1])).$m[2];
 	};
 	
-	$regex = '/\"X\"\s+:\s+\[\s+\"(.*)\",\s+\"(.*)\",\s+\"(.*)\",\s+\"(.*)\",\s+\"(.*)\",\s+\"(.*)\",\s+\"(.*)\",\s+\"(.*)\",\s+\"(.*)\",\s+\"(.*)\",\s+\"(.*)\",\s+\"(.*)\",\s+\"(.*)\",\s+\"(.*)\",\s+\"(.*)\",\s+\"(.*)\",\s+\"(.*)\",\s+\"(.*)\",\s+\"(.*)\",\s+\"(.*)\"\s+\]/U';
+	$regex = '/\"X\"\s*:\s*\[\s*\"(.*)\",\s*\"(.*)\",\s*\"(.*)\",\s*\"(.*)\",\s*\"(.*)\",\s*\"(.*)\",\s*\"(.*)\",\s*\"(.*)\",\s*\"(.*)\",\s*\"(.*)\",\s*\"(.*)\",\s*\"(.*)\",\s*\"(.*)\",\s*\"(.*)\",\s*\"(.*)\",\s*\"(.*)\",\s*\"(.*)\",\s*\"(.*)\",\s*\"(.*)\",\s*\"(.*)\"\s*\]/U';
 	$lines = array();
 	
 	$station = $channel = $title = false;
 	writeProgress(0,$length);
-	//$out = new SplFileObject(SETTINGS_FOLDER."/movies.0.new",'w');
+	$out = new SplFileObject(SETTINGS_FOLDER."/movies.0.new",'w');
 	
 	$chunksize = Settings::Get('movie_chunksize',10000);
 	
@@ -147,10 +164,10 @@ function update_movies($force=false)
 			$bc->AddStream(1,$vals[9]);
 			$bc->AddStream(2,$validateURL($vals[9],$vals[15]));
 			$chunk[$bc->id] = $bc;
-			//$out->fwrite("$bc,\n");
+			$out->fwrite("$bc,\n");
 			if( $counter % $chunksize == 0 )
 			{
-				//$out = new SplFileObject(SETTINGS_FOLDER."/movies.{$counter}.new",'w');
+				$out = new SplFileObject(SETTINGS_FOLDER."/movies.{$counter}.new",'w');
 				file_put_contents(SETTINGS_FOLDER."/movies.{$counter}.new", serialize($chunk));
 				$chunk = [];
 			}
